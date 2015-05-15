@@ -53,7 +53,6 @@ class CPayment
         //检查订单号是否合法
         if ($this->checkOrderId()) {
             //初始化model
-            $this->payment['order_id'] = $this->payment['orderId'];
             $this->payment['openid'] = $this->openid;
             $this->payment['brand_ctl_id'] = $this->brand_ctl_id;
             $this->payment['store_ctl_id'] = $this->store_ctl_id;
@@ -64,17 +63,20 @@ class CPayment
             $this->setDiscount($discount);
 
             $this->payment['actual_amount'] = $this->payment['original_amount'] - $this->payment['point_discount'] - $this->payment['other_discount'];
-            $this->payment['temp_order_id'] = Order::create_order_sn();
             $this->payment['update_time'] = time();
             //微信预支付
             $res = $this->prepay();
             if ($res['status'] == true) {
                 $this->payment['prepay_id'] = $res['data']['prepay_id'];
-                $model = Payment::model()->findByPk($this->payment['orderId']);
-                if(empty($model))
-                    $model = new Payment;
+                $model = new Payment;
                 $model->attributes = $this->payment;
                 if ($model->save()) {
+                    $userPoint = UserPoint::model()->find("openid=:openid",array('openid'=>$this->openid));
+                    if(empty($userPoint)){
+                        $user = User::model()->find("openid=:openid",array('openid'=>$this->openid));
+                        $point = new CPoint();
+                        $point->initPoint($user);
+                    }
                     $res['status'] = true;
                     $res['data'] = array('prepay_id'=>$this->payment['prepay_id']);
                 } else {
@@ -105,70 +107,39 @@ class CPayment
         $this->payment['other_discount'] = $other_discount;
     }
 
-
-    public function notify()
-    {
-        // Yii::log(var_export($paymentParams,true), 'error');
-        //使用通用通知接口
-        $notify = Weixin::api()->notify;
-        $this->setWechatData();
-        //存储微信的回调
-        $xml = $GLOBALS['HTTP_RAW_POST_DATA'];
-        $notify->saveData($xml);
-        Yii::log(var_export($notify->data, true), "error");
-        //验证签名，并回应微信。
-        //对后台通知交互时，如果微信收到商户的应答不是成功或超时，微信认为通知失败，
-        //微信会通过一定的策略（如30分钟共8次）定期重新发起通知，
-        //尽可能提高通知的成功率，但微信不保证通知最终能成功。
-        if ($notify->checkSign($this->key) == FALSE) {
-            $notify->setReturnParameter("return_code", "FAIL");//返回状态码
-            $notify->setReturnParameter("return_msg", "签名失败");//返回信息
-        } else {
-            $notify->setReturnParameter("return_code", "SUCCESS");//设置返回码
-        }
-        $returnXml = $notify->returnXml();
-        echo $returnXml;
-        //==处理支付回调数据=======
-
-        if ($notify->checkSign($this->key) == TRUE) {
-            if ($notify->data["return_code"] == "FAIL") {
-                //此处应该更新一下订单状态，商户自行增删操作
-                Yii::log("return code fail", 'error');
-            } elseif ($notify->data["result_code"] == "FAIL") {
-                //此处应该更新一下订单状态，商户自行增删操作
-                Yii::log("result code fail", 'error');
-            } else {
-                $orderId = $notify->data['attach'];
-                $this->payment = Payment::model()->findByPk($orderId);
-                $res = $this->updatePayment($this->payment,$notify->data);
-                if ($res['status'] == true) {
-                    //TODO:推送
-                } else {
-                    Yii::log($res['msg'], 'error');
-                }
-            }
-        }
-        return;
-    }
-
     /**
      * updatePayment 支付成功更新支付信息
      * @param  array $data 微信支付结果数据
      * @return array 更新结果
      */
-    public static function updatePayment($data)
+    public function updatePayment($data)
     {
         $res = array('status' => false, 'msg' => '');
         $attach = CJSON::decode($data['attach']);
-        $orderId = $attach['order_id'];
-        $storeCtlId = $attach['orderId'];
-        $payment = Payment::model()->findByPk($orderId);
+        $id = $attach['id'];
+        $storeCtlId = $attach['store_ctl_id'];
+        $payment = Payment::model()->findByPk($id);
+        Yii::log(var_export($payment->attributes,true),'error');
+        if(empty($payment)){
+            $res['msg'] = "订单不存在";
+            return $res;
+        }
+        if($payment->status == 1){
+            $res['msg'] = "订单已支付";
+            return $res;
+        }
         $payment->status = 1;
         $payment->transaction_id = $data['transaction_id'];
         $payment->payment_time = time();
-        $point = new CPoint($storeCtlId);
+        $point = new CPoint($this->openid,$storeCtlId);
+
         if ($payment->save()) {
-            if ($point->getByOnlinePay($payment->actual_amount, $payment->order_id)) ;
+            $discount = CJSON::decode($payment->discount_info);
+            Yii::log(var_export($discount,true),'error');
+            if(!empty($discount['point_discount']['point']) && $discount['point_discount']['point'] != 0){
+                $point->updatePoint($discount['point_discount']['point'],'cash','spend',$discount['point_discount']['money'],$id);
+            }
+            $res = $point->getByOnlinePay($payment->actual_amount, $payment->id);
             $res['status'] = true;
         }
         return $res;
@@ -184,7 +155,7 @@ class CPayment
         $criteria = new CDbCriteria;
         if (isset($conditions['owner']) && !empty($conditions['owner'])) {
             $criteria->addCondition($conditions['owner']['role'] . '_ctl_id=:ctl_id');
-            $criteria->params[':ctl_id'] = $conditions['owner']['ctl_id'];
+            $criteria->params['ctl_id'] = $conditions['owner']['ctl_id'];
         }
 
         if (isset($conditions['period']) && !empty($conditions['period'])) {
@@ -195,7 +166,7 @@ class CPayment
                 $criteria->addInCondition('openid', join(',', $conditions['openid']));
             } else {
                 $criteria->addCondition('openid=:openid');
-                $criteria->params[':openid'] = $conditions['openid'];
+                $criteria->params['openid'] = $conditions['openid'];
             }
         }
 
@@ -204,9 +175,11 @@ class CPayment
                 $criteria->addInCondition('payment_method', join(',', $conditions['payment_method']));
             } else {
                 $criteria->addCondition('payment_method=:payment_method');
-                $criteria->params[':payment_method'] = $conditions['payment_method'];
+                $criteria->params['payment_method'] = $conditions['payment_method'];
             }
         }
+        $criteria->addCondition('status=:status');
+        $criteria->params['status'] = $conditions['status'];
 
         $res = Payment::model()->findAll($criteria);
         return $res;
@@ -230,12 +203,12 @@ class CPayment
         $data['nonce_str'] = $nonce_str;
         $data['body'] = '支付订单';
 
-        $data['out_trade_no'] = $this->payment['temp_order_id'] ? $this->payment['temp_order_id'] : $this->payment['order_id'];
+        $data['out_trade_no'] = $this->payment['id'];
         $data['total_fee'] = $total_fee;
         $data['notify_url'] = $this->notify_url;
         $data['trade_type'] = $this->trade_type;
         $data['openid'] = $this->payment['openid'];
-        $data['attach'] = CJSON::encode(array('order_id'=>$this->payment['orderId'],'store_ctl_id'=>$this->store_ctl_id));
+        $data['attach'] = CJSON::encode(array('id'=>$this->payment['id'],'store_ctl_id'=>$this->store_ctl_id));
         $data['spbill_create_ip'] = $_SERVER['REMOTE_ADDR'];
         $data['sign'] = Weixin::api()->tool()->getSign($data, Yii::app()->site->account->key);
         $result = Weixin::api()->order->data($data)->create();
@@ -265,6 +238,24 @@ class CPayment
             $res = true;
         }
         return $res;
+    }
+    /*
+     *  微信买单当日收账
+     * $beginTime 开始时间
+     * $stopTime 结束时间
+     *  $ctl_id 门店 id
+     */
+    public static function todayWxPay($beginTime,$stopTime,$ctl_id){
+        $sql = "SELECT sum(actual_amount) total ,
+                count(*) order_num FROM {{payment}}
+                WHERE  `store_ctl_id` = '{$ctl_id}'
+                AND `payment_time` > '{$beginTime}'
+                AND `payment_time` < '{$stopTime}'";
+        $cmd = Yii::app()->db->createCommand($sql);
+        $row = $cmd->query()->read();
+        //var_dump($row);exit;
+        return $row;
+
     }
 
 }

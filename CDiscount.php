@@ -64,18 +64,36 @@ class CDiscount
     }
 
     /**
+     * @param $point int
+     * @return float
+     */
+    public function pointToMoney($point){
+        if(empty($point)||$point == 0)
+            return 0;
+        $cRule = new CRule($this->store_ctl_id);
+        $rules = $cRule->getRule();
+        $point_rule = $rules['point_rule'];
+        $money = Tool::numberFormat($point / $point_rule['point']);
+        return $money;
+    }
+    /**
      * @param $point int 积分数量
      * @param $money float 消费金额
      * @param $point_rule array 积分兑换规则
      * @return float 优惠金额
      */
-    private function parsePointRule($point, $money, $point_rule)
+    public function parsePointRule($point, $money, $point_rule)
     {
-        $totalPoint = intval($money * $point_rule['point']);
-        $maxPoint = intval($totalPoint * $point_rule['max_percent'] / 100);
-        if ($point > $maxPoint)
-            $point = $maxPoint;
-        $dMoney = $point / $point_rule['point'];
+
+        if($money == 0){
+        }else{
+            $totalPoint = intval($money * $point_rule['point']);
+            $maxPoint = intval($totalPoint * $point_rule['max_percent'] / 100);
+            if ($point > $maxPoint)
+                $point = $maxPoint;
+        }
+
+        $dMoney = Tool::numberFormat($point / $point_rule['point']);
         return array('point' => $point, 'money' => $dMoney);
     }
 

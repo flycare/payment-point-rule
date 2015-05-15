@@ -52,7 +52,10 @@ class CPoint
             $userPoint['create_time'] = $currentTime;
             $userPoint['update_time'] = $currentTime;
             $model = new UserPoint;
+            $model->attributes = $userPoint;
             if (!$model->save()) {
+                Yii::log(var_export($userPoint,true),'error');
+                Yii::log(var_export($model->getErrors(),true),'error');
                 throw new CException('更新用户积分失败');
             }
             if ($point !== 0) {
@@ -67,13 +70,15 @@ class CPoint
                 $model = new PointHistory;
                 $model->attributes = $pointHistory;
                 if (!$model->save()) {
+                    Yii::log(var_export($pointHistory,true),'error');
+                    Yii::log(var_export($model->getErrors(),true),'error');
                     throw new CException('保存用户积分历史失败');
                 }
             }
             $transaction->commit();
         } catch (Exception $e) {
             Yii::log($e->getMessage(), 'error');
-            Yii::log(debug_print_backtrace(), 'error');
+//            Yii::log(debug_print_backtrace(), 'error');
             $transaction->rollback();
             return false;
         }
@@ -91,9 +96,19 @@ class CPoint
      */
     public function updatePoint($point, $way, $operate, $money = 0, $order_id = '')
     {
-        $res = false;
+        $res = array('status'=>false,'msg'=>'');
+        if($point == 0)
+            return $res;
         $this->userPoint = $this->getUserPoint($this->open_id);
-        $this->$operate($point);
+        if(empty($this->userPoint)){
+            $res['msg'] = '用户积分数据不存在';
+            return $res;
+        }
+        if($operate == 'spend')
+            $this->spend($point);
+        if($operate == 'get')
+            $this->get($point);
+        $this->userPoint->update_time = time();
         $transaction = Yii::app()->db->beginTransaction();
         try {
             if ($this->userPoint->save()) {
@@ -110,9 +125,11 @@ class CPoint
                     'create_time' => time()
                 );
                 $pointHistory->attributes = $data;
-                if ($pointHistory->save())
-                    $res = true;
+                if ($pointHistory->save()){
+                    $res['status'] = true;
+                }
             }
+            $transaction->commit();
         } catch (Exception $e) {
             Yii::log($e->getMessage(), 'error');
             Yii::log(debug_print_backtrace(), 'error');
@@ -148,11 +165,12 @@ class CPoint
         if (is_array($openid)) {
             $ids = join(',', $openid);
             $this->criteria->addInCondition('openid', $ids);
+            $userPoint = UserPoint::model()->findAll($this->criteria);
         } else {
             $this->criteria->addCondition('openid=:openid');
             $this->criteria->params[':openid'] = $openid;
+            $userPoint = UserPoint::model()->find($this->criteria);
         }
-        $userPoint = UserPoint::model()->findAll($this->criteria);
         unset($this->criteria);
         return $userPoint;
     }
@@ -229,7 +247,8 @@ class CPoint
     public function getByOnlinePay($money, $orderId)
     {
         $point = intval($money);
-        $res = $this->updatePoint($point, $this->way_config['wx_pay'], $this->operate_config['get'], $money, $orderId);
+        $res = $this->updatePoint($point, 'wx_pay', 'get', $money, $orderId);
+        Yii::log("更新用户积分结果：".$res,'error');
         return $res;
     }
 

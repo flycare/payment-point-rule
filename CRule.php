@@ -124,7 +124,7 @@ class CRule
                             return $res;
                         }
                         $tempRule = CJSON::decode($storeRule->rule);
-                        $tempRule['point_rule'] = $rule;
+                        $tempRule['point_rule'] = $rule['point_rule'];
                         $storeRule->rule = CJSON::encode($tempRule);
                         if(!$storeRule->save()){
                             $res['msg'] = '门店规则保存失败';
