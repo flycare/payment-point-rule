@@ -39,7 +39,11 @@ class CPoint
         $point = $this->giftPoint();
         $currentTime = time();
         $transaction = Yii::app()->db->beginTransaction();
+
         try {
+            $temp = UserPoint::model()->find('openid=:openid',array("openid"=>$user['openid']));
+            if(!empty($temp))
+                throw new CException('用户积分已存在');
             $userPoint = array();
             $userPoint['brand_ctl_id'] = $this->brand_ctl_id;
             $userPoint['store_ctl_id'] = $this->store_ctl_id;
@@ -141,7 +145,10 @@ class CPoint
 
     private function spend($point)
     {
-        $this->userPoint->point -= $point;
+        if(($this->userPoint->point - $point)<0)
+            $this->userPoint->point = 0;
+        else
+            $this->userPoint->point -= $point;
     }
 
     private function get($point)

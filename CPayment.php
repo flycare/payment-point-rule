@@ -71,12 +71,9 @@ class CPayment
                 $model = new Payment;
                 $model->attributes = $this->payment;
                 if ($model->save()) {
-                    $userPoint = UserPoint::model()->find("openid=:openid",array('openid'=>$this->openid));
-                    if(empty($userPoint)){
-                        $user = User::model()->find("openid=:openid",array('openid'=>$this->openid));
-                        $point = new CPoint();
-                        $point->initPoint($user);
-                    }
+                    $user = User::model()->find("openid=:openid",array('openid'=>$this->openid));
+                    $point = new CPoint();
+                    $point->initPoint($user);
                     $res['status'] = true;
                     $res['data'] = array('prepay_id'=>$this->payment['prepay_id']);
                 } else {
@@ -250,7 +247,9 @@ class CPayment
                 count(*) order_num FROM {{payment}}
                 WHERE  `store_ctl_id` = '{$ctl_id}'
                 AND `payment_time` > '{$beginTime}'
-                AND `payment_time` < '{$stopTime}'";
+                AND `payment_time` < '{$stopTime}'
+                AND `status` IN (1,2)
+                ";
         $cmd = Yii::app()->db->createCommand($sql);
         $row = $cmd->query()->read();
         //var_dump($row);exit;
