@@ -175,7 +175,7 @@ class CPayment
                 $criteria->params['payment_method'] = $conditions['payment_method'];
             }
         }
-        $criteria->addCondition('status=:status');
+        $criteria->addCondition('status>=:status');
         $criteria->params['status'] = $conditions['status'];
 
         $res = Payment::model()->findAll($criteria);
@@ -255,6 +255,32 @@ class CPayment
         //var_dump($row);exit;
         return $row;
 
+    }
+
+    public static function getTotal($params){
+        $connection = Yii::app()->db;
+        $sql = "SELECT sum(actual_amount) as total
+                FROM {{payment}}
+                WHERE ".$params['role']."_ctl_id = {$params['ctl_id']}
+                AND `payment_time`>'{$params['start_time']}'
+                AND `payment_time`<'{$params['end_time']}'
+                AND `status`>0";
+        $rows = $connection->createCommand($sql)->queryAll();
+        if(empty($rows[0]['total']))
+            $rows[0]['total'] = Tool::numberFormat(0);
+        return $rows[0]['total'];
+    }
+
+    public static function getStoreData($params){
+        $connection = Yii::app()->db;
+        $sql = "SELECT sum(`original_amount`) as original,sum(`actual_amount`) as actual,count(id) as total,sum(point_discount) as point,sum(other_discount) as other,sum(actual_amount)/sum(original_amount) as percent
+                FROM {{payment}}
+                WHERE `store_ctl_id` = {$params['ctl_id']}
+                AND `payment_time`>'{$params['start_time']}'
+                AND `payment_time`<'{$params['end_time']}'
+                AND `status`>0";
+        $rows = $connection->createCommand($sql)->queryAll();
+        return $rows[0];
     }
 
 }
