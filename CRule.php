@@ -225,3 +225,4 @@ class CRule
         return $discountRule;
     }
 }
+

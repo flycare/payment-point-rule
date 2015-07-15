@@ -62,7 +62,41 @@ class CDiscount
         $res['off_discount'] = $this->parseDiscountRule($money, $discount_rule);
         return $res;
     }
+    public function discountMoneyToPoint($money){
+        $cRule = new CRule($this->store_ctl_id);
+        $rules = $cRule->getRule();
+        $point_rule = $rules['point_rule'];
+        $point = $money*$point_rule['point'];
+        return $point;
+    }
 
+    /**
+     * @param $money
+     * @return array
+     */
+    public function discountPreCount($money){
+        $res = array();
+        $cRule = new CRule($this->store_ctl_id);
+        $rules = $cRule->getRule();
+        $discount_rule = $rules['discount_rule'];
+        $res['discount'] = $this->parseDiscountRule($money, $discount_rule);
+        $res['remind'] = $money - $res['discount'];
+        return $res;
+    }
+
+    /**
+     * @param $money
+     * @return array
+     */
+    public function discountDeduct($money){
+        $res = array();
+        $cRule = new CRule($this->store_ctl_id);
+        $rules = $cRule->getRule();
+        $discount_rule = $rules['discount_rule'];
+        $res['discount'] = $this->parseDiscountRule($money, $discount_rule);
+        $res['remind'] = $money - $res['discount'];
+        return $res;
+    }
     /**
      * @param $point int
      * @return float
@@ -84,7 +118,6 @@ class CDiscount
      */
     public function parsePointRule($point, $money, $point_rule)
     {
-
         if($money == 0){
         }else{
             $totalPoint = intval($money * $point_rule['point']);
@@ -92,7 +125,6 @@ class CDiscount
             if ($point > $maxPoint)
                 $point = $maxPoint;
         }
-
         $dMoney = Tool::numberFormat($point / $point_rule['point']);
         return array('point' => $point, 'money' => $dMoney);
     }
@@ -121,17 +153,6 @@ class CDiscount
             }
         }
         return $dMoney;
-
     }
-
-    /**
-     * previewDiscount 预览优惠详情
-     * @param  array $condition 优惠参数
-     * @return array             优惠预览数据
-     */
-    /*public function previewDiscount($condition=array()){
-        $res = array();
-    	$rules = $this->getDiscountRule();
-        return $res;
-    }*/
 }
+
