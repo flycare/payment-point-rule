@@ -5,17 +5,17 @@
  */
 class CDiscount
 {
-    private $brand_ctl_id;
+//    private $brand_ctl_id;
     private $store_ctl_id;
-    private $discount_config = array(
-        'point' => 1,     //积分抵扣
-        'off_sale' => 2,  //满减
-        'oddment' => 3,   //抹零
-
-    );
-    private $point_config = array(
-        1 => 'wxPay'
-    );
+//    private $discount_config = array(
+//        'point' => 1,     //积分抵扣
+//        'off_sale' => 2,  //满减
+//        'oddment' => 3,   //抹零
+//
+//    );
+//    private $point_config = array(
+//        1 => 'wxPay'
+//    );
 
     public function __construct($store_ctl_id)
     {
@@ -51,18 +51,40 @@ class CDiscount
      */
     public function discountInfo($openid, $money)
     {
-        $res = array();
+        $res = array('status'=>false,'msg'=>'');
+        if(empty($openid)){
+            $res['msg'] = '错误的openid';
+            Yii::log($res['msg'],'error');
+            return $res;
+        }
+        if($money <= 0){
+            $res['msg'] = '异常金额:'.$money;
+            Yii::log($res['msg'],'error');
+            $temp = array();
+            $temp['point_discount'] = 0;
+            $temp['off_discount'] = 0;
+            return $temp;
+        }
         $cPoint = new CPoint($this->store_ctl_id);
         $userPoint = $cPoint->getUserPoint($openid);
         $cRule = new CRule($this->store_ctl_id);
         $rules = $cRule->getRule();
         $point_rule = $rules['point_rule'];
-        $res['point_discount'] = $this->parsePointRule($userPoint['point'], $money, $point_rule);
+        $temp['point_discount'] = $this->parsePointRule($userPoint['point'], $money, $point_rule);
         $discount_rule = $rules['discount_rule'];
-        $res['off_discount'] = $this->parseDiscountRule($money, $discount_rule);
-        return $res;
+        $temp['off_discount'] = $this->parseDiscountRule($money, $discount_rule);
+        return $temp;
     }
     public function discountMoneyToPoint($money){
+        $res = array('status'=>true,'msg'=>'');
+        if($money < 0){
+            $res['msg'] = '非法金额';
+            Yii::log($res['msg'],'error');
+            return $res;
+        }
+        if($money == 0){
+            return 0;
+        }
         $cRule = new CRule($this->store_ctl_id);
         $rules = $cRule->getRule();
         $point_rule = $rules['point_rule'];
@@ -74,29 +96,65 @@ class CDiscount
      * @param $money
      * @return array
      */
-    public function discountPreCount($money){
-        $res = array();
+    public function discountPreCount($money,$openid=''){
+        $res = array('status'=>false,'msg'=>'');
+        if($money < 0){
+            $res['msg'] = '异常金额';
+            Yii::log($res['msg'],'error');
+            $temp = array();
+            $temp['discount'] = 0;
+            $temp['remind'] = $money;
+            return $temp;
+        }
+        if($money == 0){
+            $temp = array('discount'=>0,'remind'=>0);
+            return $temp;
+        }
         $cRule = new CRule($this->store_ctl_id);
         $rules = $cRule->getRule();
         $discount_rule = $rules['discount_rule'];
-        $res['discount'] = $this->parseDiscountRule($money, $discount_rule);
-        $res['remind'] = $money - $res['discount'];
-        return $res;
+        //判断是否可用满减
+        if(!$this->usable_discount($this->store_ctl_id,$discount_rule,$openid)){
+            return array('discount'=>0,'remind'=>$money);
+        }
+        $temp['discount'] = $this->parseDiscountRule($money, $discount_rule);
+        $temp['remind'] = $money - $temp['discount'];
+        return $temp;
     }
 
     /**
      * @param $money
      * @return array
      */
-    public function discountDeduct($money){
-        $res = array();
+    public function discountDeduct($money,$openid=''){
+        $res = array('status'=>false,'msg'=>'');
+        if($money < 0){
+            $res['msg'] = '非法金额';
+            Yii::log($res['msg'],'error');
+            $temp['discount'] = 0;
+            $temp['remind'] = $money;
+            return $temp;
+        }
+        if($money == 0){
+            $temp = array('discount'=>0,'remind'=>0);
+            return $temp;
+        }
         $cRule = new CRule($this->store_ctl_id);
         $rules = $cRule->getRule();
         $discount_rule = $rules['discount_rule'];
-        $res['discount'] = $this->parseDiscountRule($money, $discount_rule);
-        $res['remind'] = $money - $res['discount'];
-        return $res;
+        //判断是否可用满减
+        if(!$this->usable_discount($this->store_ctl_id,$discount_rule,$openid)){
+            return array('discount'=>0,'remind'=>$money);
+        }
+        $temp['discount'] = $this->parseDiscountRule($money, $discount_rule);
+        $temp['remind'] = $money - $temp['discount'];
+        if (!empty($temp['discount'])){
+            //每日限制数加1
+            $this->setDiscountLimitNow($this->store_ctl_id,1,$openid);
+        }
+        return $temp;
     }
+
     /**
      * @param $point int
      * @return float
@@ -125,6 +183,10 @@ class CDiscount
             if ($point > $maxPoint)
                 $point = $maxPoint;
         }
+        $tempMoney = ($point*100) / $point_rule['point'];
+        $tempFloat = bcsub(abs($tempMoney),floor(abs($tempMoney)),20);
+        $keepPoint = $tempFloat*$point_rule['point']/100;
+        $point -= $keepPoint;
         $dMoney = Tool::numberFormat($point / $point_rule['point']);
         return array('point' => $point, 'money' => $dMoney);
     }
@@ -153,6 +215,68 @@ class CDiscount
             }
         }
         return $dMoney;
+    }
+
+    public function usable_discount($store_id=0,$discount_rule=array(),$openid=''){
+        if(empty($store_id) || empty($discount_rule)){
+            return false;
+        }
+        if(empty($discount_rule['num'])){//没有每日限制
+            return true;
+        }
+        $time = time();
+        if($discount_rule['begin']>$time || $discount_rule['end']<$time){
+            //未开始或者已失效
+            return false;
+        }
+        //该用户是否已用过满减
+        if($this->is_used_discount($store_id,$openid)){
+            return false;
+        }
+        //当天的限制是否已达到
+        $date_num = $this->getDiscountLimitNow($store_id);
+        if($date_num >= $discount_rule['num']){
+            return false;
+        }
+        return true;
+    }
+
+    private function getDiscountLimitNow($store_id=0){
+        if(empty($store_id)){
+            return false;
+        }
+        $key = 'getDiscountLimitNow:num:' . $store_id . ':date:' . date('Ymd');
+        return (int)Yii::app()->redisCache->get($key);
+    }
+
+    private function is_used_discount($store_id=0,$openid=''){
+        if(empty($store_id) || empty($openid)){
+            return false;
+        }
+        $key_openid = 'getDiscountLimitNow:openid:' . $store_id . ':date:' . date('Ymd');
+        $openids = (array)Yii::app()->redisCache->get($key_openid);
+        return isset($openids[$openid]);
+    }
+
+    public function setDiscountLimitNow($store_id=0,$num=0,$openid=''){
+        if(empty($store_id)){
+            return false;
+        }
+        //总数
+        $key_num = 'getDiscountLimitNow:num:' . $store_id . ':date:' . date('Ymd');
+        $now = (int)Yii::app()->redisCache->get($key_num);
+        $now = $now + $num > 0 ? $now + $num : 0;
+        Yii::app()->redisCache->set($key_num,$now,86400);
+        //用户
+        $key_openid = 'getDiscountLimitNow:openid:' . $store_id . ':date:' . date('Ymd');
+        $openids = (array)Yii::app()->redisCache->get($key_openid);
+        if($num >0){
+            $openids[$openid] = 1;
+        }else{
+            unset($openids[$openid]);
+        }
+        Yii::app()->redisCache->set($key_openid,$openids,86400);
+        return true;
     }
 }
 

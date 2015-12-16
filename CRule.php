@@ -9,9 +9,10 @@ class CRule
     private $store_ctl_id;
     private $default_rule;
 
-    public function __construct($store_ctl_id = '')
+    public function __construct($store_ctl_id = '',$brand_ctl_id='')
     {
-        $this->brand_ctl_id = Yii::app()->site->account->ctl_id;
+        $this->brand_ctl_id = !empty($brand_ctl_id) ? $brand_ctl_id : Yii::app()->site->account->ctl_id;
+        //$this->brand_ctl_id = Yii::app()->user->id;
         $this->store_ctl_id = $store_ctl_id;
         $this->default_rule = Yii::app()->params['table']['rule'];
     }
@@ -142,7 +143,8 @@ class CRule
     {
         $res = array('status' => false, 'msg' => '');
         $this->store_ctl_id = $store_ctl_id;
-        $storeRule = PointRule::model()->find("brand_ctl_id={$this->brand_ctl_id} AND store_ctl_id={$this->store_ctl_id}");
+        //$storeRule = PointRule::model()->find("brand_ctl_id={$this->brand_ctl_id} AND store_ctl_id={$this->store_ctl_id}");
+        $storeRule = PointRule::model()->find("store_ctl_id={$this->store_ctl_id}");
         if (empty($storeRule)) {
             $tempRule = $this->default_rule;
             $tempRule['discount_rule'] = $rule['discount_rule'];
@@ -186,10 +188,11 @@ class CRule
     private function _getRule($role = "store")
     {
         $key = $role . '_ctl_id';
-        if ($role == 'brand')
-            $rule = PointRule::model()->find($key . "=:ctl_id AND store_ctl_id=:store_ctl_id", array(':ctl_id' => $this->$key, ':store_ctl_id' => NULL));
-        else
+        if ($role == 'brand'){
+            $rule = PointRule::model()->find($key . "=:ctl_id AND store_ctl_id is :store_ctl_id", array(':ctl_id' => $this->$key, ':store_ctl_id' => NULL));
+        }else{
             $rule = PointRule::model()->find($key . "=:ctl_id", array(':ctl_id' => $this->$key));
+        }
         $this->rule = CJSON::decode($rule['rule']);
     }
 

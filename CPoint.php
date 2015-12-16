@@ -16,13 +16,15 @@ class CPoint
         'spend' => 0,
         'get' => 1
     );
-    //积分变动原因:抵现、砍价、微信支付、奖励、扫码支付
+    //积分变动原因:抵现、砍价、微信支付、奖励、扫码支付,兑换
     private $way_config = array(
         'cash' => 1,
         'haggle' => 2,
         'wx_pay' => 3,
         'gift' => 4,
-        'scan_pay' => 5
+        'scan_pay' => 5,
+        'refund' => 6,
+        'exchange'=>7
     );
 
     public function __construct($openid = '', $store_ctl_id = '')
@@ -37,19 +39,26 @@ class CPoint
      */
     public function initPoint($openid)
     {
-        $res = array('status'=>false,'msg'=>'');
+        $res = array('status' => false, 'msg' => '');
+        if (empty($openid)) {
+            $res['msg'] = '非法的openid';
+            Yii::log($res['msg'], 'error');
+            return $res;
+        }
         $point = $this->giftPoint();
         $currentTime = time();
-        $temp = UserPoint::model()->find('openid=:openid', array("openid" => $openid));
-        if (!empty($temp)){
+        $temp = UserPoint::model()->find('openid=:openid and brand_ctl_id=:brand_ctl_id',
+                            array("openid" => $openid,"brand_ctl_id"=>$this->brand_ctl_id));
+        if (!empty($temp)) {
             $res['msg'] = '用户积分已存在';
             return $res;
         }
-        $user = User::model()->find("openid=:openid",array('openid'=>$openid));
+        $user = User::model()->find("openid=:openid and ctl_id=:ctl_id",
+                            array('openid' => $openid,'ctl_id'=>$this->brand_ctl_id));
         $userPoint = array();
         $userPoint['brand_ctl_id'] = $this->brand_ctl_id;
         $userPoint['store_ctl_id'] = $this->store_ctl_id;
-        $userPoint['openid'] = $this->openid;
+        $userPoint['openid'] = $openid;
         $userPoint['nickname'] = $user['nickname'];
         $userPoint['headimgurl'] = $user['headimgurl'];
         $userPoint['province'] = $user['province'];
@@ -62,7 +71,7 @@ class CPoint
         if (!$userPointModel->save()) {
             Yii::log(var_export($userPoint, true), 'error');
             Yii::log(var_export($userPointModel->getErrors(), true), 'error');
-            $res['status'] = '更新用户积分失败';
+            $res['msg'] = '更新用户积分失败';
             return $res;
         }
         if ($point !== 0) {
@@ -100,27 +109,59 @@ class CPoint
     public function updatePoint($point, $way, $operate, $money = 0, $order_id = '')
     {
         $res = array('status' => false, 'msg' => '');
-        if ($point == 0){
+        if ($point < 0) {
+            $res['msg'] = '非法的积分数量';
+            Yii::log($res['msg'], 'error');
+            return $res;
+        }
+        if (empty($way) || empty($operate)) {
+            $res['msg'] = '积分操作参数缺失';
+            Yii::log($res['msg'], 'error');
+            return $res;
+        }
+        if ($point == 0) {
             $res['status'] = true;
             return $res;
         }
-        $this->userPoint = $this->getUserPoint($this->open_id);
+        $this->userPoint = $this->getUserPoint($this->openid);
         if (empty($this->userPoint)) {
-            $user = User::model()->find("openid=:openid",array('openid'=>$this->open_id));
-            $res = $this->initPoint($user);
-            if(!isset($res['status'])&&$res['status'] == false){
+            $res = $this->initPoint($this->openid);
+            if (!isset($res['status']) && $res['status'] == false) {
                 return $res;
             }
             $this->userPoint = $res['model'];
         }
+        if(empty($this->userPoint)){
+            $res['msg'] = 'openoid='. $this->openid . ';没有取到用户积分model';
+            Yii::log($res['msg'], 'error');
+            return $res;
+        }
         $this->userPoint = $this->getUserPoint($this->openid);
+        //记录point
+        $point_re = $this->userPoint->point;
+
         if ($operate == 'spend')
-            $this->spend($point);
+            $this->spend(abs($point));
         if ($operate == 'get')
-            $this->get($point);
+            $this->get(abs($point));
         $this->userPoint->update_time = time();
         if ($this->userPoint->save()) {
             $pointHistory = new PointHistory;
+
+            if($way=='refund' && $operate =='spend'){
+                //if($point_re < $point)
+                    //$point = -$point_re;
+                    $point = -$point;
+                    $this->operate_config[$operate]=1;
+            }
+
+            if($way=='refund' && $operate == 'get'){
+                if($point!=0)
+                    $point = -$point;
+                    $money = -$money;
+                    $this->operate_config[$operate]=0;
+            }
+
             $data = array(
                 'order_id' => $order_id,
                 'brand_ctl_id' => $this->brand_ctl_id,
@@ -135,11 +176,11 @@ class CPoint
             $pointHistory->attributes = $data;
             if ($pointHistory->save()) {
                 $res['status'] = true;
-            }else{
+            } else {
                 $res['msg'] = '更新积分历史记录失败';
                 return $res;
             }
-        }else{
+        } else {
             $res['msg'] = '保存用户积分数据失败';
             return $res;
         }
@@ -152,15 +193,33 @@ class CPoint
      * @param $money
      * @return array
      */
-    public function pointPreCount($money){
+    public function pointPreCount($money)
+    {
+        $rule = ControlHelps::getPointRuleStatus();
+        if($rule['usePoint'] != 1){
+            $result['point'] = 0;
+            $result['remind'] = $money;
+            return $result;
+        }
+        if($money <= 0){
+            $result['point'] = 0;
+            $result['remind'] = $money;
+            return $result;
+        }
         $res = array();
         $userPoint = $this->getUserPoint($this->openid);
         $cRule = new CRule($this->store_ctl_id);
         $rules = $cRule->getRule();
         $point_rule = $rules['point_rule'];
-        $discout = new CDiscount($this->store_ctl_id);
-        $userPoint['point'] = $userPoint['point']?$userPoint['point']:0;
-        $temp = $discout->parsePointRule($userPoint['point'], $money, $point_rule);
+        $discount = new CDiscount($this->store_ctl_id);
+        $userPoint['point'] = $userPoint['point'] ? $userPoint['point'] : 0;
+        $temp = $discount->parsePointRule($userPoint['point'], $money, $point_rule);
+        if($temp['money']  <  1){
+            $result['point'] = 0;
+            $result['discount'] = 0;
+            $result['remind'] = $money - $res['discount'];
+            return $result;
+        }
         $res['point'] = $temp['point'];
         $res['discount'] = $temp['money'];
         $res['remind'] = $money - $res['discount'];
@@ -168,14 +227,68 @@ class CPoint
     }
 
     /**
+     * @param $point
+     * @return array
+     */
+    public function pointRefund($point)
+    {
+        $res = array('status'=>false,'msg'=>'');
+        if ($point == 0) {
+            $res['status'] = true;
+            return $res;
+        }
+        if ($point > 0) {
+            $point = abs($point);
+            $res = $this->updatePoint($point, 'refund', 'get');
+        } else {
+            $point = abs($point);
+            $res = $this->updatePoint($point, 'refund', 'spend');
+        }
+        return $res;
+    }
+
+    /**
+     * @param $point
+     * @return array
+     */
+    public function pointRefundRe($point,$money)
+    {
+        $res = array('status'=>false,'msg'=>'');
+
+        if ($point['userPoint'] == 0&&$point['newPoint']==0) {
+            $res['status'] = true;
+            return $res;
+        }
+
+        $res = $this->updatePoint($point['newPoint'], 'refund', 'spend',$money);
+        $res = $this->updatePoint($point['userPoint'] , 'refund', 'get',$money);
+
+        return $res;
+    }
+
+    /**
      * 订单完成，累加积分
-     * @param $orderId
+     * @param $money
      * @return bool
      */
-    public function pointDone($money){
-        $res = $this->updatePoint(intval($money),'wx_pay','get');
-        if($res['status'] === false){
-            Yii::log(var_export($res,true),'error');
+    public function pointDone($money)
+    {
+        $res = array('status' => false, 'msg' => '');
+        $rule = ControlHelps::getPointRuleStatus();
+        if($rule['generate'] == 0){
+            $result['point'] = 0;
+            $result['remind'] = $money;
+            return $result;
+        }
+        if ($money <= 0) {
+            $res['msg'] = '异常金额:'.$money;
+            Yii::log($res['msg'], 'error');
+            $res['status'] = true;
+            return $res;
+        }
+        $res = $this->updatePoint(intval($money), 'wx_pay', 'get');
+        if ($res['status'] === false) {
+            Yii::log(var_export($res, true), 'error');
         }
         return $res;
     }
@@ -185,16 +298,36 @@ class CPoint
      * @param $money
      * @return bool
      */
-    public function pointDeduct($money){
+    public function pointDeduct($money)
+    {
+        $res = array('status' => false, 'msg' => '');
+        $rule = ControlHelps::getPointRuleStatus();
+        if($rule['usePoint'] != 1){
+            $result['point'] = 0;
+            $result['remind'] = $money;
+            return $result;
+        }
+        if($money <= 0){
+            $res['msg'] = '可疑金额';
+            Yii::log($res['msg'], 'error');
+            $result['point'] = 0;
+            $result['remind'] = $money;
+            return $result;
+        }
         $temp = $this->pointPreCount($money);
         $point = $temp['point'];
         $dmoney = $temp['discount'];
-        Yii::log("point=========".$point,'error');
-        Yii::log("dmoney=========".$dmoney,'error');
-        $res = $this->updatePoint($point,'cash','spend',$dmoney);
-        if(isset($res['status']) && $res['status'] === false){
+        if($dmoney  <  1){
+            $result['point'] = 0;
+            $result['remind'] = $money;
+            return $result;
+        }
+        Yii::log("point=========" . $point, 'error');
+        Yii::log("dmoney=========" . $dmoney, 'error');
+        $res = $this->updatePoint($point, 'cash', 'spend', $dmoney);
+        if (isset($res['status']) && $res['status'] === false) {
             return $res;
-        }else{
+        } else {
             $result['point'] = $dmoney;
             $result['remind'] = $temp['remind'];
             return $result;
@@ -230,12 +363,13 @@ class CPoint
         if (is_array($openid)) {
             $ids = join(',', $openid);
             $this->criteria->addInCondition('openid', $ids);
-            $userPoint = UserPoint::model()->findAll($this->criteria);
         } else {
             $this->criteria->addCondition('openid=:openid');
             $this->criteria->params[':openid'] = $openid;
-            $userPoint = UserPoint::model()->find($this->criteria);
         }
+        $this->criteria->addCondition('brand_ctl_id=:brand_ctl_id');
+        $this->criteria->params[':brand_ctl_id'] = $this->brand_ctl_id;
+        $userPoint = UserPoint::model()->find($this->criteria);
         unset($this->criteria);
         return $userPoint;
     }
@@ -304,18 +438,4 @@ class CPoint
             $res = true;
         return $res;
     }
-
-    /**
-     * getByOnlinePay 微信支付获得积分
-     * @return int 积分数量
-     */
-    public function getByOnlinePay($money, $orderId)
-    {
-        $point = intval($money);
-        $res = $this->updatePoint($point, 'wx_pay', 'get', $money, $orderId);
-        Yii::log("更新用户积分结果：" . $res, 'error');
-        return $res;
-    }
-
-
 }
